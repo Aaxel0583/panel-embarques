@@ -504,6 +504,12 @@
       <label>Transportistas</label>
       <div class="chip-row" id="carrierChips"></div>
     </div>
+    <div class="fgroup">
+      <label>Disponibilidad</label>
+      <div class="chip-row">
+        <div class="chip" id="fExcludeExpired" title="Cuenta como &quot;unidad activa&quot; solo las que están dadas de alta en el registro de Unidades autorizadas; ignora unidades que aparecen en los embarques pero no están registradas">Solo unidades autorizadas</div>
+      </div>
+    </div>
     <button class="resetbtn" id="resetBtn">↺ Restablecer filtros</button>
     <button class="resetbtn" id="exportBtn">⬇ Descargar Excel</button>
     <div class="filter-status" id="filterStatus"></div>
@@ -725,7 +731,7 @@
         <li><b>Toneladas en base húmeda</b>: todo el peso neto reportado en este panel (KPIs, gráficas, tabla y exportaciones) es <b>peso húmedo</b>, es decir, tal como se recibe el embarque, sin descuento de humedad.</li>
         <li><b>Unidades autorizadas</b> = registro por unidad física (transportista + unidad + año(s) en que está vigente), tomado de <code>unidadesautorizadas.xlsx</code>. Para 2025 solo se usó la columna "tamizaje" de esa hoja (se ignoró "base de datos" a propósito); para 2026 se tomó cada unidad con su año de alta. Una misma unidad vigente en 2025 y 2026 a la vez cuenta una sola vez al calcular el total, para no duplicarla. Se gestiona con permisos restringidos desde la sección "Cargar información" y se guarda para todas las personas que abran este panel.</li>
         <li><b>Advertencia de descontinuación</b> = se muestra cuando a una unidad le faltan 3 meses o menos para cumplir 5 años desde su fecha de alta (si esa fecha se conoce). Si ya los cumplió, se marca como vencida. Las unidades sin fecha de alta registrada no muestran advertencia por falta de dato.</li>
-        <li><b>% de disponibilidad</b> = unidades distintas que operaron en el periodo filtrado ÷ unidades activas autorizadas para ese transportista. Es un indicador de <i>utilización de la flota autorizada</i>, no de disponibilidad mecánica.</li>
+        <li><b>% de disponibilidad</b> = unidades distintas que operaron en el periodo filtrado ÷ unidades activas autorizadas para ese transportista. Es un indicador de <i>utilización de la flota autorizada</i>, no de disponibilidad mecánica real (el panel no sabe si una unidad estuvo en taller, siniestrada, etc. — solo si registró viajes o no). Por defecto, el numerador cuenta cualquier unidad que aparezca en los embarques, esté o no dada de alta en el registro de "Unidades autorizadas" (por ejemplo, una unidad de reemplazo no registrada). El interruptor "Solo unidades autorizadas" de la barra de filtros hace que el numerador cuente únicamente unidades que sí están en ese registro, para comparar autorizadas contra autorizadas y que el % no salga inflado (o por encima de 100%) por unidades no registradas.</li>
         <li><b>Promedio neto húmedo</b> = toneladas netas (húmedas) reales ÷ viajes reales (peso neto húmedo promedio por embarque/guía). <b>Promedio neto húmedo por unidad</b> = toneladas netas (húmedas) reales ÷ unidades activas en el periodo.</li>
         <li>Identificador de unidad = transportista + número de unidad/tolva reportado en la columna de identificación de la hoja "Acumulado".</li>
         <li><b>Roles de acceso</b>: sin iniciar sesión, cualquiera puede consultar y filtrar el panel y descargar el Excel (rol "usuario"). Con sesión de <b>supervisor</b> se puede además cargar embarques (formulario, CSV o Excel). Algunas acciones adicionales (modificar las unidades activas autorizadas, modificar el presupuesto de viajes/toneladas, eliminar un embarque cargado para revertir un error de captura, o dar de baja/reactivar el sistema) están restringidas a cuentas con permisos ampliados.</li>
@@ -810,6 +816,17 @@ function distinctAuthorizedUnits(carrier, years){
     if(u.anios.some(y=>years.has(y))) set.add(u.unidad);
   });
   return set.size;
+}
+
+// true si esa unidad (transportista + clave) está dada de alta en el registro de unidades autorizadas,
+// sin importar el año — se usa para el interruptor "Solo unidades autorizadas".
+function isAuthorizedUnit(carrier, unidadCode){
+  const key = carrier + '|' + String(unidadCode).toUpperCase();
+  return authorizedUnitKeys.has(key);
+}
+let authorizedUnitKeys = new Set();
+function rebuildAuthorizedUnitKeys(){
+  authorizedUnitKeys = new Set(unitRegistry.map(u=> u.transportista + '|' + u.unidad.toUpperCase()));
 }
 
 // Meses entre dos fechas (toDate - fromDate), puede ser negativo si toDate ya pasó.
@@ -914,7 +931,8 @@ const state = {
   hasta: null,
   anio: 'todos',
   mes: 'todos',
-  carriers: new Set(CARRIERS)
+  carriers: new Set(CARRIERS),
+  onlyAuthorizedUnits: false
 };
 
 /* ============ INICIALIZAR CONTROLES ============ */
@@ -923,6 +941,7 @@ const fHasta = document.getElementById('fHasta');
 const fAnio = document.getElementById('fAnio');
 const fMes = document.getElementById('fMes');
 const carrierChips = document.getElementById('carrierChips');
+const fExcludeExpired = document.getElementById('fExcludeExpired');
 const filterStatus = document.getElementById('filterStatus');
 const plateRange = document.getElementById('plateRange');
 
@@ -961,11 +980,18 @@ fDesde.addEventListener('change', ()=>{ state.desde = parseLocalDate(fDesde.valu
 fHasta.addEventListener('change', ()=>{ state.hasta = parseLocalDate(fHasta.value); update(); });
 fAnio.addEventListener('change', ()=>{ state.anio = fAnio.value; update(); });
 fMes.addEventListener('change', ()=>{ state.mes = fMes.value; update(); });
+fExcludeExpired.addEventListener('click', ()=>{
+  fExcludeExpired.classList.toggle('on');
+  state.onlyAuthorizedUnits = fExcludeExpired.classList.contains('on');
+  update();
+});
 document.getElementById('resetBtn').addEventListener('click', ()=>{
   state.desde = DATA_MIN; state.hasta = DATA_MAX; state.anio='todos'; state.mes='todos';
   state.carriers = new Set(CARRIERS);
+  state.onlyAuthorizedUnits = false;
   fDesde.value = isoDate(DATA_MIN); fHasta.value = isoDate(DATA_MAX);
   fAnio.value='todos'; fMes.value='todos';
+  fExcludeExpired.classList.remove('on');
   [...carrierChips.children].forEach(ch=>ch.classList.add('on'));
   update();
 });
@@ -1023,7 +1049,12 @@ function computeMetrics(){
     pc.viajesReal += 1;
     pc.tonReal += r.neto;
     pc.costoReal += r.costo;
-    pc.unidadesActivas.add(r.unit);
+    if(state.onlyAuthorizedUnits){
+      const rawUnit = r.unit.slice(r.carrier.length+1);
+      if(isAuthorizedUnit(r.carrier, rawUnit)) pc.unidadesActivas.add(r.unit);
+    } else {
+      pc.unidadesActivas.add(r.unit);
+    }
   });
 
   const result = {};
@@ -1219,7 +1250,7 @@ function renderTable(perCarrier){
 function renderStatus(perCarrier, timeFiltered){
   const active = CARRIERS.filter(c=>state.carriers.has(c));
   const n = active.reduce((s,c)=>s+perCarrier[c].viajesReal,0);
-  filterStatus.textContent = `${fmtInt(n)} embarques en el filtro actual`;
+  filterStatus.textContent = `${fmtInt(n)} embarques en el filtro actual` + (state.onlyAuthorizedUnits ? ' · disponibilidad solo con unidades autorizadas' : '');
 }
 
 /* ============ GRÁFICAS (Chart.js) ============ */
@@ -1283,16 +1314,6 @@ function baseBarOptions(yLabel){
     }
   };
 }
-// Agrega un eje derecho "yPct" (0-100%+) a un set de opciones, para la línea de tendencia en %.
-function withPctAxis(options){
-  return {
-    ...options,
-    scales:{
-      ...options.scales,
-      yPct:{position:'right', min:0, grid:{display:false}, ticks:{callback:v=>v+'%'}, title:{display:true, text:'%', font:{size:10}}}
-    }
-  };
-}
 
 function renderCharts(perCarrier, trend){
   if (typeof Chart === 'undefined') {
@@ -1309,41 +1330,32 @@ function renderCharts(perCarrier, trend){
   const realCostoTon = active.map(c=>perCarrier[c].costoTonReal);
   const ptoCostoTon = active.map(c=>perCarrier[c].costoTonPto);
   const cumpl = active.map(c=>perCarrier[c].pctCumplViajes);
-  const cumplTon = active.map(c=>perCarrier[c].pctCumplTon);
-  const cumplCostoTon = realCostoTon.map((v,i)=> safeDiv(v, ptoCostoTon[i]) * 100);
   const disp = active.map(c=>perCarrier[c].pctDisponibilidad);
 
   const dsPair = (labelReal, real, labelPto, pto) => [
     {label:labelReal, data:real, backgroundColor:COLOR_REAL, borderRadius:4, maxBarThickness:34},
     {label:labelPto, data:pto, backgroundColor:COLOR_PTO, borderRadius:4, maxBarThickness:34}
   ];
-  // Línea de tendencia (% cumplimiento) que se superpone a un par de barras real/presupuesto.
-  const pctTrendLine = (label, values, color) => ({
-    type:'line', label, data:values, yAxisID:'yPct',
-    borderColor:color, backgroundColor:color, borderWidth:2, tension:0.3,
-    pointRadius:4, pointBackgroundColor:color, pointBorderColor:'#fff', pointBorderWidth:1,
-    valueLabels: values.map(v=>fmtPct(v))
-  });
 
   if(chartViajes) chartViajes.destroy();
   chartViajes = new Chart(document.getElementById('chartViajes'), {
     type:'bar',
-    data:{labels:active, datasets:[...dsPair('Real', realViajes, 'Presupuesto', ptoViajes), pctTrendLine('% cumplimiento', cumpl, COLOR_MOSS)]},
-    options: withPctAxis({...baseBarOptions('viajes'), plugins:{legend:{display:true, labels:{boxWidth:10, font:{size:11}}}}})
+    data:{labels:active, datasets:dsPair('Real', realViajes, 'Presupuesto', ptoViajes)},
+    options: {...baseBarOptions('viajes'), plugins:{legend:{display:true, labels:{boxWidth:10, font:{size:11}}}}}
   });
 
   if(chartToneladas) chartToneladas.destroy();
   chartToneladas = new Chart(document.getElementById('chartToneladas'), {
     type:'bar',
-    data:{labels:active, datasets:[...dsPair('Real', realTon, 'Presupuesto', ptoTon), pctTrendLine('% cumplimiento', cumplTon, COLOR_MOSS)]},
-    options: withPctAxis({...baseBarOptions('toneladas'), plugins:{legend:{display:true, labels:{boxWidth:10, font:{size:11}}}}})
+    data:{labels:active, datasets:dsPair('Real', realTon, 'Presupuesto', ptoTon)},
+    options: {...baseBarOptions('toneladas'), plugins:{legend:{display:true, labels:{boxWidth:10, font:{size:11}}}}}
   });
 
   if(chartCostoTon) chartCostoTon.destroy();
   chartCostoTon = new Chart(document.getElementById('chartCostoTon'), {
     type:'bar',
-    data:{labels:active, datasets:[...dsPair('Real', realCostoTon, 'Presupuesto', ptoCostoTon), pctTrendLine('% real / presupuesto', cumplCostoTon, COLOR_RUST)]},
-    options: withPctAxis({...baseBarOptions('$ / tonelada'), plugins:{legend:{display:true, labels:{boxWidth:10, font:{size:11}}}}})
+    data:{labels:active, datasets:dsPair('Real', realCostoTon, 'Presupuesto', ptoCostoTon)},
+    options: {...baseBarOptions('$ / tonelada'), plugins:{legend:{display:true, labels:{boxWidth:10, font:{size:11}}}}}
   });
 
   if(chartPct) chartPct.destroy();
@@ -1351,9 +1363,7 @@ function renderCharts(perCarrier, trend){
     type:'bar',
     data:{labels:active, datasets:[
       {label:'% Cumplimiento (viajes)', data:cumpl, backgroundColor:COLOR_MOSS, borderRadius:4, maxBarThickness:28},
-      {label:'% Disponibilidad', data:disp, backgroundColor:COLOR_REAL, borderRadius:4, maxBarThickness:28},
-      {type:'line', label:'Tendencia % cumplimiento', data:cumpl, borderColor:COLOR_MOSS, backgroundColor:COLOR_MOSS, borderWidth:2, tension:0.3, pointRadius:4, pointBackgroundColor:COLOR_MOSS, pointBorderColor:'#fff', pointBorderWidth:1, valueLabels:cumpl.map(v=>fmtPct(v))},
-      {type:'line', label:'Tendencia % disponibilidad', data:disp, borderColor:COLOR_PTO, backgroundColor:COLOR_PTO, borderWidth:2, tension:0.3, pointRadius:4, pointBackgroundColor:COLOR_PTO, pointBorderColor:'#fff', pointBorderWidth:1, valueLabels:disp.map(v=>fmtPct(v))}
+      {label:'% Disponibilidad', data:disp, backgroundColor:COLOR_REAL, borderRadius:4, maxBarThickness:28}
     ]},
     options: {...baseBarOptions('%'), plugins:{legend:{display:true, labels:{boxWidth:10, font:{size:11}}}}}
   });
@@ -2049,6 +2059,7 @@ function renderUnitsForm(){
     btn.addEventListener('click', async ()=>{
       if(!confirm('¿Eliminar esta unidad del registro de autorizadas?')) return;
       unitRegistry = unitRegistry.filter(u=>u.id !== btn.dataset.id);
+      rebuildAuthorizedUnitKeys();
       await safeSet('unit-registry', unitRegistry, true);
       renderUnitsForm();
       update();
@@ -2077,9 +2088,11 @@ document.getElementById('unitsSubmit').addEventListener('click', async ()=>{
 
   const record = { id: nextUnitId(), transportista, unidad, anios, fechaAlta: fecha, agregadoPor: currentUser.username };
   unitRegistry.push(record);
+  rebuildAuthorizedUnitKeys();
   const saved = await safeSet('unit-registry', unitRegistry, true);
   if(!saved){
     unitRegistry.pop();
+    rebuildAuthorizedUnitKeys();
     msgEl.textContent = 'No se pudo guardar (error de almacenamiento). Intenta de nuevo.';
     msgEl.className = 'form-msg err';
     return;
@@ -2156,6 +2169,7 @@ async function boot(){
     }));
     await safeSet('unit-registry', unitRegistry, true);
   }
+  rebuildAuthorizedUnitKeys();
   const savedBudget = await safeGet('budget-pct', true);
   if(savedBudget){
     BUDGET_YEARS.forEach(y=>{
