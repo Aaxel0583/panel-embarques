@@ -686,7 +686,7 @@
 
     <div class="entry-card" style="margin-top:16px;">
       <h3>Embarques cargados manualmente</h3>
-      <p class="hint">Historial de lo agregado (formulario, CSV o Excel). Si hay un error de carga, un registro puede eliminarse para revertirlo y volver a cargarlo correctamente.</p>
+      <p class="hint">Cargas recientes (formulario, CSV o Excel). Si hubo un error, el registro puede eliminarse aquí para revertirlo y volver a cargarlo correctamente. Pasadas <b id="ventanaHoras">72</b> horas el embarque sale de esta lista, pero sigue contando en todos los indicadores y gráficas.</p>
       <div class="extra-scroll">
         <table class="extra-table">
           <thead><tr><th>Fecha</th><th>Transportista</th><th>Unidad</th><th>Peso neto húmedo</th><th>Costo</th><th>Agregó</th><th></th></tr></thead>
@@ -991,7 +991,8 @@ function sbRowToRecord(row){
     Number(row.neto_ton),
     Number(row.costo_viaje) || 0,
     row.capturado_por || '',
-    'sb-' + row.id
+    'sb-' + row.id,
+    row.creado_en || null
   ];
 }
 
@@ -1002,10 +1003,26 @@ function sbIsCaptured(row){
   return who && who !== 'historico' && who !== 'histórico' && who !== 'seed';
 }
 
+// Ventana de reversión: cuántas horas permanece un embarque en la tabla de
+// "Embarques cargados manualmente". Pasado ese tiempo desaparece de esa lista
+// (el embarque NO se borra: sigue contando en todos los indicadores y gráficas;
+// solo deja de ofrecerse el botón para revertirlo, y así la lista no crece sin
+// control). Ajustable: 24 = un día, 72 = tres días, 168 = una semana.
+const VENTANA_REVERSION_HORAS = 72;
+
+function dentroDeVentanaReversion(creadoEn){
+  if(!creadoEn) return true; // sin marca de tiempo, se conserva visible
+  const t = new Date(creadoEn).getTime();
+  if(!isFinite(t)) return true;
+  return (Date.now() - t) <= VENTANA_REVERSION_HORAS * 3600 * 1000;
+}
+
 function sbApplyRows(rows){
   const valid = rows.filter(r => r && r.fecha && CARRIERS.includes(normalizeCarrierCode(String(r.transportista||'').trim().toUpperCase())));
   SB_RECORDS = valid.map(sbRowToRecord);
-  SB_CAPTURED = valid.filter(sbIsCaptured).map(sbRowToRecord);
+  SB_CAPTURED = valid
+    .filter(r => sbIsCaptured(r) && dentroDeVentanaReversion(r.creado_en))
+    .map(sbRowToRecord);
 }
 
 // La API de Supabase devuelve como máximo 1000 filas por consulta, así que se
@@ -2244,10 +2261,12 @@ document.getElementById('templateBtn').addEventListener('click', downloadTemplat
 
 function renderExtraTable(){
   const body = document.getElementById('extraBody');
+  const vh = document.getElementById('ventanaHoras');
+  if(vh) vh.textContent = VENTANA_REVERSION_HORAS;
   const canDelete = effectiveRole() === 'nivel2';
   const lista = sbEnabled() ? SB_CAPTURED : extraRecords;
   if(lista.length === 0){
-    body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--slate-light);">Aún no se ha cargado información adicional.</td></tr>';
+    body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--slate-light);">Sin cargas en las últimas ${VENTANA_REVERSION_HORAS} horas.</td></tr>`;
     return;
   }
   body.innerHTML = lista.slice().reverse().map(r=>`
